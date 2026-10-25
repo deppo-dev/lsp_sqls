@@ -131,6 +131,7 @@ SQL LSP automatically detects SQL dialects using:
 
 - `*.mysql.sql` → MySQL
 - `*.postgres.sql` or `*.pgsql` → PostgreSQL
+- `*.mssql.sql`, `*.tsql.sql`, `*.mssql` or `*.tsql` → SQL Server (T-SQL)
 - `*.hive.sql` or `*.hql` → Hive
 - `*.es.eql` or `*.eql` → Elasticsearch EQL
 - `*.es.dsl` or `*.es.json` → Elasticsearch DSL
@@ -143,6 +144,7 @@ If the file extension is generic (e.g., `.sql`), the LSP uses the `languageId` p
 
 - `mysql`, `mysql-sql` → MySQL
 - `postgresql`, `postgres`, `pgsql` → PostgreSQL
+- `mssql`, `tsql` → SQL Server (T-SQL)
 - `hive`, `hql` → Hive
 - `elasticsearch-eql`, `eql` → Elasticsearch EQL
 - `elasticsearch-dsl`, `es-dsl`, `json` (with "elasticsearch" in URI) → Elasticsearch DSL

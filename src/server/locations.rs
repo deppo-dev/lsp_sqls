@@ -72,6 +72,8 @@ pub(super) fn is_identifier_character(character: char, dialect: &str) -> bool {
             "mongodb" | "elasticsearch-dsl" | "elasticsearch-eql" => {
                 matches!(character, '.' | '-' | '@')
             }
+            // T-SQL names: `#temp` / `##global` tables and `@variables`.
+            _ if crate::tsql::is_tsql_dialect(dialect) => matches!(character, '$' | '#' | '@'),
             _ => character == '$',
         }
 }
@@ -97,7 +99,10 @@ pub(super) fn deduplicate_locations(locations: &mut Vec<Location>) {
 }
 
 pub(super) fn supports_semantic_rename(dialect: &str) -> bool {
-    matches!(dialect, "postgres" | "mysql" | "clickhouse" | "hive")
+    matches!(
+        dialect,
+        "postgres" | "mysql" | "mssql" | "clickhouse" | "hive"
+    )
 }
 
 pub(super) fn workspace_symbol_matches(query: &str, name: &str, container: &str) -> bool {

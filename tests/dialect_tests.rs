@@ -2270,11 +2270,9 @@ async fn test_mongodb_accepts_and_formats_whitespace_separated_commands() {
 }
 
 #[tokio::test]
-async fn sqlserver_catalog_qualified_alias_completion_is_exact() {
+async fn mssql_catalog_qualified_alias_completion_is_exact() {
     let registry = DialectRegistry::new();
-    let dialect = registry
-        .get_by_name("sqlserver")
-        .expect("SQL Server dialect");
+    let dialect = registry.get_by_name("mssql").expect("SQL Server dialect");
     let schema = Schema {
         id: SchemaId::new(),
         catalog: Some("AppDb".to_string()),

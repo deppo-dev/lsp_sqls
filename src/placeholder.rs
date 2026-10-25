@@ -22,6 +22,9 @@ pub enum SqlPlaceholderDialect {
     Generic,
     Postgres,
     Mysql,
+    /// SQL Server: `#` starts a temp table's name, never a comment, and the
+    /// parser reads the text through `crate::tsql::rewrite_for_parser`.
+    Mssql,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +44,13 @@ pub fn normalize_sql_placeholders_for_dialect(
     source: &str,
     dialect: SqlPlaceholderDialect,
 ) -> String {
+    let rewritten;
+    let source = if dialect == SqlPlaceholderDialect::Mssql {
+        rewritten = crate::tsql::rewrite_for_parser(source);
+        rewritten.as_str()
+    } else {
+        source
+    };
     let spans = sql_placeholder_spans_for_dialect(source, dialect);
     if spans.is_empty() {
         return source.to_string();
@@ -378,7 +388,10 @@ fn is_template_name_continue(byte: &u8) -> bool {
 }
 
 fn starts_hash_comment(source: &str, index: usize, dialect: SqlPlaceholderDialect) -> bool {
-    dialect != SqlPlaceholderDialect::Postgres
+    !matches!(
+        dialect,
+        SqlPlaceholderDialect::Postgres | SqlPlaceholderDialect::Mssql
+    ) && !crate::tsql::is_active()
         && source[index..].starts_with('#')
         && !source[index..].starts_with("#>")
         && !source[index..].starts_with("#-")

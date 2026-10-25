@@ -254,7 +254,6 @@ pub(super) const PRODUCT_SQL_FILE_SUFFIX_DIALECTS: &[(&str, &str)] = &[
     ("oracle", "oracle"),
     ("questdb", "questdb"),
     ("redshift", "redshift"),
-    ("sqlserver", "sqlserver"),
     ("starrocks", "starrocks"),
     ("sundb", "sundb"),
     ("tidb", "tidb"),

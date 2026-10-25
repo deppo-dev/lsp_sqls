@@ -149,7 +149,7 @@ fn local_relation_augmentation_models_dbx_correlation_column_shapes() {
 }
 
 #[test]
-fn sqlserver_table_hints_preserve_remote_column_shapes() {
+fn mssql_table_hints_preserve_remote_column_shapes() {
     for sql in [
         "SELECT * FROM users u (NOLOCK) WHERE u.",
         "SELECT * FROM users u WITH (UPDLOCK, ROWLOCK) WHERE u.",
@@ -158,7 +158,7 @@ fn sqlserver_table_hints_preserve_remote_column_shapes() {
             semantic_test_schema(),
             sql,
             lsp_position_at_end(sql),
-            "oxide://query/hints.sqlserver.sql",
+            "oxide://query/hints.mssql.sql",
         );
         let users = augmented
             .tables
@@ -197,7 +197,7 @@ async fn dbx_cte_column_scope_is_shared_by_native_and_compatibility_dialects() {
         "hive",
         "clickhouse",
         "oracle",
-        "sqlserver",
+        "mssql",
         "duckdb",
     ] {
         let dialect = registry

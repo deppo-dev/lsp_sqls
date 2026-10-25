@@ -45,6 +45,12 @@ pub(super) fn infer_dialect_from_uri_and_language(
         || uri_lower.ends_with(".duckdb")
     {
         return "sqlite".to_string();
+    } else if uri_lower.ends_with(".mssql.sql")
+        || uri_lower.ends_with(".tsql.sql")
+        || uri_lower.ends_with(".mssql")
+        || uri_lower.ends_with(".tsql")
+    {
+        return "mssql".to_string();
     } else if uri_lower.ends_with(".hive.sql") || uri_lower.ends_with(".hql") {
         return "hive".to_string();
     } else if let Some(dialect) = product_sql_file_suffix_dialect(&uri_lower) {
@@ -74,6 +80,7 @@ pub(super) fn infer_dialect_from_uri_and_language(
         "mysql" | "mysql-sql" => "mysql".to_string(),
         "postgresql" | "postgres" | "postgres-sql" | "pgsql" | "psql" => "postgres".to_string(),
         "sqlite" | "sqlite3" | "duckdb" => "sqlite".to_string(),
+        "mssql" | "tsql" => "mssql".to_string(),
         "hive" | "hql" => "hive".to_string(),
         "elasticsearch-eql" | "eql" => "elasticsearch-eql".to_string(),
         "elasticsearch-dsl" | "es-dsl" | "json" if uri_lower.contains("elasticsearch") => {

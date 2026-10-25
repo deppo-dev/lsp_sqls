@@ -8,7 +8,7 @@ pub(super) fn initialize_result(
     completion_documentation_resolve_supported: &AtomicBool,
 ) -> InitializeResult {
     completion_documentation_resolve_supported.store(
-        client_supports_completion_documentation_resolve(&params),
+        client_supports_completion_documentation_resolve(params),
         Ordering::Relaxed,
     );
     InitializeResult {

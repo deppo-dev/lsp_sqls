@@ -6,11 +6,32 @@ pub(crate) fn format_sql_pretty(source: &str) -> String {
 }
 
 pub(crate) fn format_sql_pretty_with_keyword_case(source: &str, uppercase: Option<bool>) -> String {
+    format_sql_pretty_for(source, sqlformat::Dialect::Generic, uppercase)
+}
+
+/// The sqlformat dialect a document's dialect formats in. Only SQL Server's
+/// differs from the generic one: the others keep their established output.
+pub(crate) fn sqlformat_dialect_for(dialect_name: &str) -> sqlformat::Dialect {
+    if crate::tsql::is_tsql_dialect(dialect_name) {
+        sqlformat::Dialect::SQLServer
+    } else {
+        sqlformat::Dialect::Generic
+    }
+}
+
+/// Format in a dialect sqlformat knows: SQL Server's keeps `[bracketed]`
+/// names and `@variables` whole.
+pub(crate) fn format_sql_pretty_for(
+    source: &str,
+    dialect: sqlformat::Dialect,
+    uppercase: Option<bool>,
+) -> String {
     use sqlformat::{FormatOptions, Indent, QueryParams};
     let options = FormatOptions {
         indent: Indent::Spaces(2),
         uppercase,
         lines_between_queries: 1,
+        dialect,
         ..FormatOptions::default()
     };
     sqlformat::format(source, &QueryParams::None, &options)
@@ -98,7 +119,7 @@ pub(crate) fn apply_formatter_layout(
     if logical_operator_layout != LogicalOperatorLayout::Before {
         let mut rewritten_lines = Vec::with_capacity(lines.len());
         let mut rewritten_masked_lines = Vec::with_capacity(masked_lines.len());
-        for (current, masked_line) in lines.into_iter().zip(masked_lines.into_iter()) {
+        for (current, masked_line) in lines.into_iter().zip(masked_lines) {
             let leading = masked_line.len() - masked_line.trim_start().len();
             let trimmed_upper = masked_line[leading..].to_ascii_uppercase();
             let operator_len = ["AND", "OR", "XOR"]

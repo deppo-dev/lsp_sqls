@@ -233,11 +233,7 @@ pub(super) fn cte_tables_before_cursor(
         if recursive {
             cursor = skip_sql_trivia(source, cursor + "RECURSIVE".len());
         }
-        loop {
-            let Some((name, name_start, name_end)) = read_local_identifier_after(source, cursor)
-            else {
-                break;
-            };
+        while let Some((name, name_start, name_end)) = read_local_identifier_after(source, cursor) {
             cursor = skip_sql_trivia(source, name_end);
             let mut explicit_columns = Vec::new();
             if source[cursor..].starts_with('(') {
@@ -490,34 +486,7 @@ pub(super) fn correlation_column_names_after(
 }
 
 pub(super) fn is_sqlserver_table_hint_list(names: &[String]) -> bool {
-    const TABLE_HINTS: &[&str] = &[
-        "FORCESEEK",
-        "FORCESCAN",
-        "HOLDLOCK",
-        "INDEX",
-        "NOEXPAND",
-        "NOLOCK",
-        "NOWAIT",
-        "PAGLOCK",
-        "READCOMMITTED",
-        "READCOMMITTEDLOCK",
-        "READPAST",
-        "READUNCOMMITTED",
-        "REPEATABLEREAD",
-        "ROWLOCK",
-        "SERIALIZABLE",
-        "SNAPSHOT",
-        "SPATIAL_WINDOW_MAX_CELLS",
-        "TABLOCK",
-        "TABLOCKX",
-        "UPDLOCK",
-        "XLOCK",
-    ];
-    names.iter().any(|name| {
-        TABLE_HINTS
-            .iter()
-            .any(|hint| name.eq_ignore_ascii_case(hint))
-    })
+    names.iter().any(|name| crate::tsql::is_table_hint(name))
 }
 
 pub(super) fn infer_query_output_columns(

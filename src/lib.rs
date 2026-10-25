@@ -8,6 +8,7 @@ pub mod position;
 pub mod schema;
 pub mod server;
 pub mod token;
+pub mod tsql;
 
 pub use dialect::Dialect;
 pub use parser::{CompletionContext, ParseResult, SqlParser};

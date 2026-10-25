@@ -13,11 +13,18 @@ pub(super) async fn document_diagnostics(
     text: &str,
     schema: Option<&Schema>,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = dialect.parse(text, schema).await;
-    if matches!(dialect.name(), "postgres" | "mysql" | "clickhouse" | "hive") {
-        diagnostics.extend(sql_inspection_diagnostics(text, schema, dialect.name()));
-    }
-    diagnostics
+    let tsql = crate::tsql::is_tsql_dialect(dialect.name());
+    crate::tsql::scope(tsql, async {
+        let mut diagnostics = dialect.parse(text, schema).await;
+        if matches!(
+            dialect.name(),
+            "postgres" | "mysql" | "mssql" | "clickhouse" | "hive"
+        ) {
+            diagnostics.extend(sql_inspection_diagnostics(text, schema, dialect.name()));
+        }
+        diagnostics
+    })
+    .await
 }
 
 pub(super) fn sql_inspection_diagnostics(

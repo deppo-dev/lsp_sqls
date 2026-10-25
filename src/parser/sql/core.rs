@@ -87,11 +87,21 @@ impl SqlParser {
         }
     }
 
+    /// The dialect the text is read in: T-SQL for any parser while a T-SQL
+    /// document is analyzed (`crate::tsql::scope`), else the parser's own.
+    fn dialect(&self) -> SqlPlaceholderDialect {
+        if crate::tsql::is_active() {
+            SqlPlaceholderDialect::Mssql
+        } else {
+            self.placeholder_dialect
+        }
+    }
+
     /// 解析 SQL 语句
     pub fn parse(&mut self, sql: &str) -> ParseResult {
         // 存储 source 以便后续使用
         self.source = sql.to_string();
-        let normalized_sql = normalize_sql_placeholders_for_dialect(sql, self.placeholder_dialect);
+        let normalized_sql = normalize_sql_placeholders_for_dialect(sql, self.dialect());
         let tree = self.parser.parse(&normalized_sql, None);
 
         let mut diagnostics = Vec::new();
@@ -139,9 +149,9 @@ impl SqlParser {
         previous_tree: &Tree,
     ) -> ParseResult {
         self.source = sql.to_string();
-        let normalized_sql = normalize_sql_placeholders_for_dialect(sql, self.placeholder_dialect);
+        let normalized_sql = normalize_sql_placeholders_for_dialect(sql, self.dialect());
         let previous_normalized =
-            normalize_sql_placeholders_for_dialect(previous_source, self.placeholder_dialect);
+            normalize_sql_placeholders_for_dialect(previous_source, self.dialect());
         let mut edited_tree = previous_tree.clone();
         edited_tree.edit(&minimal_input_edit(&previous_normalized, &normalized_sql));
         let tree = self.parser.parse(&normalized_sql, Some(&edited_tree));

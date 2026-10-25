@@ -147,6 +147,13 @@ impl SqlLspServer {
             .and_then(|dialect_name| self.dialect_registry.get_by_name(dialect_name.value()))
     }
 
+    /// Whether a document is T-SQL, so its requests read it as such
+    /// (`crate::tsql::scope`).
+    pub(super) fn reads_tsql(&self, uri: &Url) -> bool {
+        self.get_dialect_for_file(uri.as_str())
+            .is_some_and(|dialect| crate::tsql::is_tsql_dialect(dialect.name()))
+    }
+
     pub(super) fn dialect_identity_for_file(&self, uri: &str) -> Option<String> {
         self.configured_file_dialects
             .get(uri)
@@ -241,7 +248,10 @@ impl SqlLspServer {
         text: &str,
         dialect: &str,
     ) -> Option<tree_sitter::Tree> {
-        if !matches!(dialect, "postgres" | "mysql" | "clickhouse" | "hive") {
+        if !matches!(
+            dialect,
+            "postgres" | "mysql" | "mssql" | "clickhouse" | "hive"
+        ) {
             self.analysis_cache.remove(uri);
             return None;
         }
@@ -253,6 +263,7 @@ impl SqlLspServer {
         let placeholder_dialect = match dialect {
             "postgres" => SqlPlaceholderDialect::Postgres,
             "mysql" => SqlPlaceholderDialect::Mysql,
+            "mssql" => SqlPlaceholderDialect::Mssql,
             _ => SqlPlaceholderDialect::Generic,
         };
         let mut parser = SqlParser::new_with_placeholder_dialect(placeholder_dialect);

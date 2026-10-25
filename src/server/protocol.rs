@@ -33,7 +33,8 @@ use super::signature_help::{
 use crate::builtin_signatures::builtin_signatures_for;
 use crate::dialects::common::apply_formatter_function_case;
 use crate::dialects::common::apply_formatter_layout;
-use crate::dialects::common::format_sql_pretty_with_keyword_case;
+use crate::dialects::common::format_sql_pretty_for;
+use crate::dialects::common::sqlformat_dialect_for;
 use crate::position::lsp_position_at_end;
 use crate::schema::Schema;
 use std::collections::HashMap;
@@ -322,28 +323,32 @@ impl LanguageServer for SqlLspServer {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri.to_string();
-        let position = params.text_document_position.position;
+        let tsql = self.reads_tsql(&params.text_document_position.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document_position.text_document.uri.to_string();
+            let position = params.text_document_position.position;
 
-        let text = self.document_manager.get(&uri).unwrap_or_default();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
 
-        let Some(mut items) = self
-            .completion_candidates_at(&uri, &text, position, params.context.as_ref())
-            .await
-        else {
-            return Ok(None);
-        };
-        if self
-            .completion_documentation_resolve_supported
-            .load(Ordering::Relaxed)
-        {
-            defer_completion_documentation(
-                &mut items,
-                &self.completion_resolve_cache,
-                &self.next_completion_resolve_id,
-            );
-        }
-        Ok(Some(CompletionResponse::Array(items)))
+            let Some(mut items) = self
+                .completion_candidates_at(&uri, &text, position, params.context.as_ref())
+                .await
+            else {
+                return Ok(None);
+            };
+            if self
+                .completion_documentation_resolve_supported
+                .load(Ordering::Relaxed)
+            {
+                defer_completion_documentation(
+                    &mut items,
+                    &self.completion_resolve_cache,
+                    &self.next_completion_resolve_id,
+                );
+            }
+            Ok(Some(CompletionResponse::Array(items)))
+        })
+        .await
     }
 
     async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
@@ -354,323 +359,335 @@ impl LanguageServer for SqlLspServer {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_string();
-        let position = params.text_document_position_params.position;
+        let tsql = self.reads_tsql(&params.text_document_position_params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params
+                .text_document_position_params
+                .text_document
+                .uri
+                .to_string();
+            let position = params.text_document_position_params.position;
 
-        let text = self.document_manager.get(&uri).unwrap_or_default();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
 
-        if let Some(dialect) = self.get_dialect_for_file(&uri) {
-            let schema = self.get_schema_for_position(&uri, &text, position);
-            return Ok(dialect.hover(&text, position, schema.as_ref()).await);
-        }
+            if let Some(dialect) = self.get_dialect_for_file(&uri) {
+                let schema = self.get_schema_for_position(&uri, &text, position);
+                return Ok(dialect.hover(&text, position, schema.as_ref()).await);
+            }
 
-        Ok(None)
+            Ok(None)
+        })
+        .await
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let document_uri = params.text_document_position_params.text_document.uri;
-        let uri = document_uri.to_string();
-        let position = params.text_document_position_params.position;
+        let tsql = self.reads_tsql(&params.text_document_position_params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let document_uri = params.text_document_position_params.text_document.uri;
+            let uri = document_uri.to_string();
+            let position = params.text_document_position_params.position;
 
-        let text = self.document_manager.get(&uri).unwrap_or_default();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
 
-        if let Some(dialect) = self.get_dialect_for_file(&uri) {
-            let schema = self.get_schema_for_position(&uri, &text, position);
-            if let Some(mut location) = dialect
-                .goto_definition(&text, position, schema.as_ref())
-                .await
-            {
-                rewrite_current_document_location_uri(&mut location, &document_uri);
-                return Ok(Some(GotoDefinitionResponse::Scalar(location)));
-            }
-            if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, position) {
-                if let Some(location) = self.project_sql_definition(
-                    &uri,
-                    dialect.name(),
-                    schema.as_ref().map(|schema| schema.id),
-                    &target,
-                ) {
+            if let Some(dialect) = self.get_dialect_for_file(&uri) {
+                let schema = self.get_schema_for_position(&uri, &text, position);
+                if let Some(mut location) = dialect
+                    .goto_definition(&text, position, schema.as_ref())
+                    .await
+                {
+                    rewrite_current_document_location_uri(&mut location, &document_uri);
                     return Ok(Some(GotoDefinitionResponse::Scalar(location)));
                 }
+                if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, position) {
+                    if let Some(location) = self.project_sql_definition(
+                        &uri,
+                        dialect.name(),
+                        schema.as_ref().map(|schema| schema.id),
+                        &target,
+                    ) {
+                        return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+                    }
+                }
             }
-        }
 
-        Ok(None)
+            Ok(None)
+        })
+        .await
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let document_uri = params.text_document_position.text_document.uri;
-        let uri = document_uri.to_string();
-        let position = params.text_document_position.position;
-        let include_declarations = params.context.include_declaration;
+        let tsql = self.reads_tsql(&params.text_document_position.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let document_uri = params.text_document_position.text_document.uri;
+            let uri = document_uri.to_string();
+            let position = params.text_document_position.position;
+            let include_declarations = params.context.include_declaration;
 
-        let text = self.document_manager.get(&uri).unwrap_or_default();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
 
-        if let Some(dialect) = self.get_dialect_for_file(&uri) {
-            let schema = self.get_schema_for_position(&uri, &text, position);
-            let mut locations = dialect.references(&text, position, schema.as_ref()).await;
-            rewrite_current_document_location_uris(&mut locations, &document_uri);
-            if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, position) {
-                locations = self.matching_project_sql_locations(
-                    &uri,
-                    dialect.name(),
-                    schema.as_ref().map(|schema| schema.id),
-                    &target,
-                    include_declarations,
-                );
+            if let Some(dialect) = self.get_dialect_for_file(&uri) {
+                let schema = self.get_schema_for_position(&uri, &text, position);
+                let mut locations = dialect.references(&text, position, schema.as_ref()).await;
+                rewrite_current_document_location_uris(&mut locations, &document_uri);
+                if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, position) {
+                    locations = self.matching_project_sql_locations(
+                        &uri,
+                        dialect.name(),
+                        schema.as_ref().map(|schema| schema.id),
+                        &target,
+                        include_declarations,
+                    );
+                }
+                deduplicate_locations(&mut locations);
+                locations.truncate(PROJECT_SQL_INDEX_MAX_RESULTS);
+                return Ok(Some(locations));
             }
-            deduplicate_locations(&mut locations);
-            locations.truncate(PROJECT_SQL_INDEX_MAX_RESULTS);
-            return Ok(Some(locations));
-        }
 
-        Ok(None)
+            Ok(None)
+        })
+        .await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_string();
-        let position = params.text_document_position_params.position;
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let Some(call) = routine_call_at_position(&text, position) else {
-            return Ok(None);
-        };
-        let schema = self.get_schema_for_position(&uri, &text, position);
-        let mut live_overloads = schema
-            .as_ref()
-            .map(|schema| {
-                schema
-                    .functions
-                    .iter()
-                    .filter(|function| routine_names_match(&function.name, &call.name))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        live_overloads.sort_by_key(|function| !live_overload_accepts_call(function, &call));
-        live_overloads.truncate(SIGNATURE_HELP_MAX_OVERLOADS);
-
-        let mut signatures = live_overloads
-            .iter()
-            .filter(|_| call.active_group == 0)
-            .map(|function| live_signature_information(function, &call))
-            .collect::<Vec<_>>();
-        if signatures.is_empty() {
-            let dialect = self
-                .dialect_identity_for_file(&uri)
-                .or_else(|| {
-                    self.get_dialect_for_file(&uri)
-                        .map(|dialect| dialect.name().into())
+        let tsql = self.reads_tsql(&params.text_document_position_params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params
+                .text_document_position_params
+                .text_document
+                .uri
+                .to_string();
+            let position = params.text_document_position_params.position;
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let Some(call) = routine_call_at_position(&text, position) else {
+                return Ok(None);
+            };
+            let schema = self.get_schema_for_position(&uri, &text, position);
+            let mut live_overloads = schema
+                .as_ref()
+                .map(|schema| {
+                    schema
+                        .functions
+                        .iter()
+                        .filter(|function| routine_names_match(&function.name, &call.name))
+                        .collect::<Vec<_>>()
                 })
-                .unwrap_or_else(|| self.default_dialect_name());
-            let mut builtins = builtin_signatures_for(
-                &dialect,
-                &call.name,
-                schema.as_ref().and_then(Schema::server_version_tuple),
-            );
-            builtins.sort_by_key(|signature| !builtin_overload_accepts_call(signature, &call));
-            builtins.truncate(SIGNATURE_HELP_MAX_OVERLOADS);
-            signatures = builtins
+                .unwrap_or_default();
+            live_overloads.sort_by_key(|function| !live_overload_accepts_call(function, &call));
+            live_overloads.truncate(SIGNATURE_HELP_MAX_OVERLOADS);
+
+            let mut signatures = live_overloads
                 .iter()
-                .filter_map(|signature| builtin_signature_information(signature, &call, &dialect))
-                .collect();
-        }
-        if signatures.is_empty() {
-            return Ok(None);
-        }
-        let active_parameter = signatures[0]
-            .active_parameter
-            .unwrap_or(call.active_parameter);
-        Ok(Some(SignatureHelp {
-            signatures,
-            active_signature: Some(0),
-            active_parameter: Some(active_parameter),
-        }))
+                .filter(|_| call.active_group == 0)
+                .map(|function| live_signature_information(function, &call))
+                .collect::<Vec<_>>();
+            if signatures.is_empty() {
+                let dialect = self
+                    .dialect_identity_for_file(&uri)
+                    .or_else(|| {
+                        self.get_dialect_for_file(&uri)
+                            .map(|dialect| dialect.name().into())
+                    })
+                    .unwrap_or_else(|| self.default_dialect_name());
+                let mut builtins = builtin_signatures_for(
+                    &dialect,
+                    &call.name,
+                    schema.as_ref().and_then(Schema::server_version_tuple),
+                );
+                builtins.sort_by_key(|signature| !builtin_overload_accepts_call(signature, &call));
+                builtins.truncate(SIGNATURE_HELP_MAX_OVERLOADS);
+                signatures = builtins
+                    .iter()
+                    .filter_map(|signature| {
+                        builtin_signature_information(signature, &call, &dialect)
+                    })
+                    .collect();
+            }
+            if signatures.is_empty() {
+                return Ok(None);
+            }
+            let active_parameter = signatures[0]
+                .active_parameter
+                .unwrap_or(call.active_parameter);
+            Ok(Some(SignatureHelp {
+                signatures,
+                active_signature: Some(0),
+                active_parameter: Some(active_parameter),
+            }))
+        })
+        .await
     }
 
     async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let Some(dialect) = self.get_dialect_for_file(&uri) else {
-            return Ok(None);
-        };
-        if !supports_semantic_rename(dialect.name()) {
-            return Ok(None);
-        }
-        if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, params.position) {
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let Some(dialect) = self.get_dialect_for_file(&uri) else {
+                return Ok(None);
+            };
+            if !supports_semantic_rename(dialect.name()) {
+                return Ok(None);
+            }
+            if let Some(target) = self.project_sql_symbol_at_position(&uri, &text, params.position)
+            {
+                let schema = self.get_schema_for_position(&uri, &text, params.position);
+                return Ok(self
+                    .project_sql_symbol_is_renameable(
+                        &uri,
+                        dialect.name(),
+                        schema.as_ref(),
+                        &target,
+                    )
+                    .then_some(PrepareRenameResponse::Range(target.range)));
+            }
+            let Some(range) =
+                cte_identifier_range_at_position(&text, params.position, dialect.name())
+            else {
+                return Ok(None);
+            };
             let schema = self.get_schema_for_position(&uri, &text, params.position);
-            return Ok(self
-                .project_sql_symbol_is_renameable(&uri, dialect.name(), schema.as_ref(), &target)
-                .then_some(PrepareRenameResponse::Range(target.range)));
-        }
-        let Some(range) = cte_identifier_range_at_position(&text, params.position, dialect.name())
-        else {
-            return Ok(None);
-        };
-        let schema = self.get_schema_for_position(&uri, &text, params.position);
-        Ok((!dialect
-            .references(&text, params.position, schema.as_ref())
-            .await
-            .is_empty())
-        .then_some(PrepareRenameResponse::Range(range)))
+            Ok((!dialect
+                .references(&text, params.position, schema.as_ref())
+                .await
+                .is_empty())
+            .then_some(PrepareRenameResponse::Range(range)))
+        })
+        .await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
-        let uri = params.text_document_position.text_document.uri.to_string();
-        let position = params.text_document_position.position;
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let Some(dialect) = self.get_dialect_for_file(&uri) else {
-            return Ok(None);
-        };
-        if !supports_semantic_rename(dialect.name()) || !valid_renamed_identifier(&params.new_name)
-        {
-            return Ok(None);
-        }
-        let schema = self.get_schema_for_position(&uri, &text, position);
-        let target = self.project_sql_symbol_at_position(&uri, &text, position);
-        if target.is_none()
-            && cte_identifier_range_at_position(&text, position, dialect.name()).is_some()
-        {
-            let mut locations = dialect.references(&text, position, schema.as_ref()).await;
-            let Ok(document_uri) = Url::parse(&uri) else {
+        let tsql = self.reads_tsql(&params.text_document_position.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document_position.text_document.uri.to_string();
+            let position = params.text_document_position.position;
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let Some(dialect) = self.get_dialect_for_file(&uri) else {
                 return Ok(None);
             };
-            rewrite_current_document_location_uris(&mut locations, &document_uri);
-            deduplicate_locations(&mut locations);
-            let edits = locations
-                .into_iter()
-                .map(|location| TextEdit {
-                    range: location.range,
-                    new_text: params.new_name.clone(),
-                })
-                .collect::<Vec<_>>();
-            if edits.is_empty() {
+            if !supports_semantic_rename(dialect.name())
+                || !valid_renamed_identifier(&params.new_name)
+            {
                 return Ok(None);
             }
-            return Ok(Some(WorkspaceEdit {
-                changes: Some(HashMap::from([(document_uri, edits)])),
+            let schema = self.get_schema_for_position(&uri, &text, position);
+            let target = self.project_sql_symbol_at_position(&uri, &text, position);
+            if target.is_none()
+                && cte_identifier_range_at_position(&text, position, dialect.name()).is_some()
+            {
+                let mut locations = dialect.references(&text, position, schema.as_ref()).await;
+                let Ok(document_uri) = Url::parse(&uri) else {
+                    return Ok(None);
+                };
+                rewrite_current_document_location_uris(&mut locations, &document_uri);
+                deduplicate_locations(&mut locations);
+                let edits = locations
+                    .into_iter()
+                    .map(|location| TextEdit {
+                        range: location.range,
+                        new_text: params.new_name.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                if edits.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(WorkspaceEdit {
+                    changes: Some(HashMap::from([(document_uri, edits)])),
+                    document_changes: None,
+                    change_annotations: None,
+                }));
+            }
+            let Some(target) = target else {
+                return Ok(None);
+            };
+            if !self.project_sql_symbol_is_renameable(
+                &uri,
+                dialect.name(),
+                schema.as_ref(),
+                &target,
+            ) {
+                return Ok(None);
+            }
+            let mut changes = HashMap::new();
+            for location in self.matching_project_sql_locations(
+                &uri,
+                dialect.name(),
+                schema.as_ref().map(|schema| schema.id),
+                &target,
+                true,
+            ) {
+                changes
+                    .entry(location.uri)
+                    .or_insert_with(Vec::new)
+                    .push(TextEdit {
+                        range: location.range,
+                        new_text: params.new_name.clone(),
+                    });
+            }
+            if changes.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(WorkspaceEdit {
+                changes: Some(changes),
                 document_changes: None,
                 change_annotations: None,
-            }));
-        }
-        let Some(target) = target else {
-            return Ok(None);
-        };
-        if !self.project_sql_symbol_is_renameable(&uri, dialect.name(), schema.as_ref(), &target) {
-            return Ok(None);
-        }
-        let mut changes = HashMap::new();
-        for location in self.matching_project_sql_locations(
-            &uri,
-            dialect.name(),
-            schema.as_ref().map(|schema| schema.id),
-            &target,
-            true,
-        ) {
-            changes
-                .entry(location.uri)
-                .or_insert_with(Vec::new)
-                .push(TextEdit {
-                    range: location.range,
-                    new_text: params.new_name.clone(),
-                });
-        }
-        if changes.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }))
+            }))
+        })
+        .await
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let uri = params.text_document.uri;
-        let uri_string = uri.to_string();
-        let text = self.document_manager.get(&uri_string).unwrap_or_default();
-        let Some(dialect) = self.get_dialect_for_file(&uri_string) else {
-            return Ok(None);
-        };
-        let dialect_identity = self
-            .dialect_identity_for_file(&uri_string)
-            .unwrap_or_else(|| dialect.name().to_string());
-        let schema = self.get_schema_for_position(&uri_string, &text, params.range.start);
-        let mut actions = Vec::new();
-        // Formatting is already exposed through textDocument/formatting. Do
-        // not format the full console for every automatic lightbulb request;
-        // build the source action only when the client explicitly asks for it.
-        if code_action_kind_explicitly_requested(&params.context, &CodeActionKind::SOURCE) {
-            let formatted = dialect.format(&text).await;
-            if formatted != text {
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: "Format document with database dialect".to_string(),
-                    kind: Some(CodeActionKind::SOURCE),
-                    edit: Some(single_document_edit(
-                        uri.clone(),
-                        Range::new(Position::new(0, 0), lsp_position_at_end(&text)),
-                        formatted,
-                    )),
-                    ..Default::default()
-                }));
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri;
+            let uri_string = uri.to_string();
+            let text = self.document_manager.get(&uri_string).unwrap_or_default();
+            let Some(dialect) = self.get_dialect_for_file(&uri_string) else {
+                return Ok(None);
+            };
+            let dialect_identity = self
+                .dialect_identity_for_file(&uri_string)
+                .unwrap_or_else(|| dialect.name().to_string());
+            let schema = self.get_schema_for_position(&uri_string, &text, params.range.start);
+            let mut actions = Vec::new();
+            // Formatting is already exposed through textDocument/formatting. Do
+            // not format the full console for every automatic lightbulb request;
+            // build the source action only when the client explicitly asks for it.
+            if code_action_kind_explicitly_requested(&params.context, &CodeActionKind::SOURCE) {
+                let formatted = dialect.format(&text).await;
+                if formatted != text {
+                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: "Format document with database dialect".to_string(),
+                        kind: Some(CodeActionKind::SOURCE),
+                        edit: Some(single_document_edit(
+                            uri.clone(),
+                            Range::new(Position::new(0, 0), lsp_position_at_end(&text)),
+                            formatted,
+                        )),
+                        ..Default::default()
+                    }));
+                }
             }
-        }
-        if code_action_kind_available(&params.context, &CodeActionKind::REFACTOR_REWRITE) {
-            if let Some(action) = expand_select_star_action(
-                &text,
-                &uri,
-                params.range,
-                schema.clone(),
-                &dialect_identity,
-            ) {
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-            actions.extend(
-                qualify_identifier_actions(
+            if code_action_kind_available(&params.context, &CodeActionKind::REFACTOR_REWRITE) {
+                if let Some(action) = expand_select_star_action(
                     &text,
                     &uri,
                     params.range,
-                    schema.as_ref(),
+                    schema.clone(),
                     &dialect_identity,
-                )
-                .into_iter()
-                .map(CodeActionOrCommand::CodeAction),
-            );
-        }
-        for diagnostic in params
-            .context
-            .diagnostics
-            .iter()
-            .filter(|_| code_action_kind_available(&params.context, &CodeActionKind::QUICKFIX))
-        {
-            if matches!(
-                diagnostic.code.as_ref(),
-                Some(NumberOrString::String(code)) if code == "OXIDE001"
-            ) {
-                if let Some(action) = add_mutation_safety_guard_action(&text, &uri, diagnostic) {
+                ) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
-            } else if matches!(
-                diagnostic.code.as_ref(),
-                Some(NumberOrString::String(code)) if code == "OXIDE002"
-            ) {
                 actions.extend(
-                    add_join_condition_actions(
+                    qualify_identifier_actions(
                         &text,
                         &uri,
-                        diagnostic,
+                        params.range,
                         schema.as_ref(),
                         &dialect_identity,
                     )
@@ -678,23 +695,114 @@ impl LanguageServer for SqlLspServer {
                     .map(CodeActionOrCommand::CodeAction),
                 );
             }
-        }
-        Ok(Some(actions))
+            for diagnostic in
+                params.context.diagnostics.iter().filter(|_| {
+                    code_action_kind_available(&params.context, &CodeActionKind::QUICKFIX)
+                })
+            {
+                if matches!(
+                    diagnostic.code.as_ref(),
+                    Some(NumberOrString::String(code)) if code == "OXIDE001"
+                ) {
+                    if let Some(action) = add_mutation_safety_guard_action(&text, &uri, diagnostic)
+                    {
+                        actions.push(CodeActionOrCommand::CodeAction(action));
+                    }
+                } else if matches!(
+                    diagnostic.code.as_ref(),
+                    Some(NumberOrString::String(code)) if code == "OXIDE002"
+                ) {
+                    actions.extend(
+                        add_join_condition_actions(
+                            &text,
+                            &uri,
+                            diagnostic,
+                            schema.as_ref(),
+                            &dialect_identity,
+                        )
+                        .into_iter()
+                        .map(CodeActionOrCommand::CodeAction),
+                    );
+                }
+            }
+            Ok(Some(actions))
+        })
+        .await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
 
-        if let Some(dialect) = self.get_dialect_for_file(&uri) {
+            if let Some(dialect) = self.get_dialect_for_file(&uri) {
+                let preferences = self
+                    .formatting_preferences
+                    .read()
+                    .map(|preferences| preferences.clone())
+                    .unwrap_or_default();
+                let formatted = if dialect_uses_sql_preferences(dialect.name()) {
+                    let formatted = format_sql_pretty_for(
+                        &text,
+                        sqlformat_dialect_for(dialect.name()),
+                        preferences.keyword_uppercase(),
+                    );
+                    let formatted =
+                        apply_formatter_function_case(&formatted, preferences.function_uppercase());
+                    apply_formatter_layout(
+                        &formatted,
+                        preferences.logical_operator_layout(),
+                        matches!(preferences.from_clause_layout, FromClauseLayout::SameLine),
+                    )
+                } else {
+                    dialect.format(&text).await
+                };
+                let range = Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: lsp_position_at_end(&text),
+                };
+                return Ok(Some(vec![TextEdit {
+                    range,
+                    new_text: formatted,
+                }]));
+            }
+
+            Ok(None)
+        })
+        .await
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let Some(dialect) = self.get_dialect_for_file(&uri) else {
+                return Ok(None);
+            };
+            let start = position_to_byte_offset(&text, params.range.start);
+            let end = position_to_byte_offset(&text, params.range.end);
+            let Some(selected) = text.get(start.min(end)..end.max(start)) else {
+                return Ok(None);
+            };
             let preferences = self
                 .formatting_preferences
                 .read()
                 .map(|preferences| preferences.clone())
                 .unwrap_or_default();
             let formatted = if dialect_uses_sql_preferences(dialect.name()) {
-                let formatted =
-                    format_sql_pretty_with_keyword_case(&text, preferences.keyword_uppercase());
+                let formatted = format_sql_pretty_for(
+                    selected,
+                    sqlformat_dialect_for(dialect.name()),
+                    preferences.keyword_uppercase(),
+                );
                 let formatted =
                     apply_formatter_function_case(&formatted, preferences.function_uppercase());
                 apply_formatter_layout(
@@ -703,128 +811,102 @@ impl LanguageServer for SqlLspServer {
                     matches!(preferences.from_clause_layout, FromClauseLayout::SameLine),
                 )
             } else {
-                dialect.format(&text).await
+                dialect.format(selected).await
             };
-            let range = Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: lsp_position_at_end(&text),
-            };
-            return Ok(Some(vec![TextEdit {
-                range,
+            Ok(Some(vec![TextEdit {
+                range: params.range,
                 new_text: formatted,
-            }]));
-        }
-
-        Ok(None)
-    }
-
-    async fn range_formatting(
-        &self,
-        params: DocumentRangeFormattingParams,
-    ) -> Result<Option<Vec<TextEdit>>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let Some(dialect) = self.get_dialect_for_file(&uri) else {
-            return Ok(None);
-        };
-        let start = position_to_byte_offset(&text, params.range.start);
-        let end = position_to_byte_offset(&text, params.range.end);
-        let Some(selected) = text.get(start.min(end)..end.max(start)) else {
-            return Ok(None);
-        };
-        let preferences = self
-            .formatting_preferences
-            .read()
-            .map(|preferences| preferences.clone())
-            .unwrap_or_default();
-        let formatted = if dialect_uses_sql_preferences(dialect.name()) {
-            let formatted =
-                format_sql_pretty_with_keyword_case(selected, preferences.keyword_uppercase());
-            let formatted =
-                apply_formatter_function_case(&formatted, preferences.function_uppercase());
-            apply_formatter_layout(
-                &formatted,
-                preferences.logical_operator_layout(),
-                matches!(preferences.from_clause_layout, FromClauseLayout::SameLine),
-            )
-        } else {
-            dialect.format(selected).await
-        };
-        Ok(Some(vec![TextEdit {
-            range: params.range,
-            new_text: formatted,
-        }]))
+            }]))
+        })
+        .await
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let project_symbols = self.project_sql_index_for_document(&uri, &text);
-        let symbols = document_symbols(
-            &text,
-            self.get_schema_for_file(&uri).as_ref(),
-            &project_symbols,
-        );
-        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let project_symbols = self.project_sql_index_for_document(&uri, &text);
+            let symbols = document_symbols(
+                &text,
+                self.get_schema_for_file(&uri).as_ref(),
+                &project_symbols,
+            );
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        })
+        .await
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let text = self
-            .document_manager
-            .get(params.text_document.uri.as_str())
-            .unwrap_or_default();
-        Ok(Some(folding_ranges(&text)))
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let text = self
+                .document_manager
+                .get(params.text_document.uri.as_str())
+                .unwrap_or_default();
+            Ok(Some(folding_ranges(&text)))
+        })
+        .await
     }
 
     async fn selection_range(
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let dialect_name = self
-            .get_dialect_for_file(&uri)
-            .map(|dialect| dialect.name().to_string())
-            .unwrap_or_else(|| "postgres".to_string());
-        Ok(Some(
-            params
-                .positions
-                .into_iter()
-                .map(|position| selection_range_for_position(&text, position, &dialect_name))
-                .collect(),
-        ))
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let dialect_name = self
+                .get_dialect_for_file(&uri)
+                .map(|dialect| dialect.name().to_string())
+                .unwrap_or_else(|| "postgres".to_string());
+            Ok(Some(
+                params
+                    .positions
+                    .into_iter()
+                    .map(|position| selection_range_for_position(&text, position, &dialect_name))
+                    .collect(),
+            ))
+        })
+        .await
     }
 
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let schema = self.get_schema_for_file(&uri);
-        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-            result_id: None,
-            data: schema_semantic_tokens(&text, schema.as_ref()),
-        })))
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let schema = self.get_schema_for_file(&uri);
+            Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                result_id: None,
+                data: schema_semantic_tokens(&text, schema.as_ref()),
+            })))
+        })
+        .await
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
-        let uri = params.text_document.uri.to_string();
-        let text = self.document_manager.get(&uri).unwrap_or_default();
-        let Some(schema) = self.get_schema_for_file(&uri) else {
-            return Ok(Some(Vec::new()));
-        };
-        let mut hints = insert_value_hints(&text, params.range, &schema);
-        hints.extend(routine_parameter_hints(&text, params.range, &schema));
-        hints.sort_by_key(|hint| (hint.position.line, hint.position.character));
-        hints.truncate(INLAY_HINT_MAX_ITEMS);
-        Ok(Some(hints))
+        let tsql = self.reads_tsql(&params.text_document.uri);
+        crate::tsql::scope(tsql, async move {
+            let uri = params.text_document.uri.to_string();
+            let text = self.document_manager.get(&uri).unwrap_or_default();
+            let Some(schema) = self.get_schema_for_file(&uri) else {
+                return Ok(Some(Vec::new()));
+            };
+            let mut hints = insert_value_hints(&text, params.range, &schema);
+            hints.extend(routine_parameter_hints(&text, params.range, &schema));
+            hints.sort_by_key(|hint| (hint.position.line, hint.position.character));
+            hints.truncate(INLAY_HINT_MAX_ITEMS);
+            Ok(Some(hints))
+        })
+        .await
     }
 
     #[allow(deprecated)]

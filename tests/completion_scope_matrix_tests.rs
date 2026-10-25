@@ -1,6 +1,6 @@
 use sql_lsp::dialect::Dialect;
 use sql_lsp::dialects::{
-    ClickHouseDialect, HiveDialect, MysqlDialect, PostgresDialect, SqliteDialect,
+    ClickHouseDialect, HiveDialect, MssqlDialect, MysqlDialect, PostgresDialect, SqliteDialect,
 };
 use sql_lsp::schema::{Column, Schema, SchemaId, Table};
 use tower_lsp::lsp_types::Position;
@@ -185,10 +185,5 @@ async fn relational_dialects_preserve_quoted_aliases_in_column_insertions() {
     assert_quoted_alias_insertion("SQLite", SqliteDialect::new(), "\"User Source\"").await;
     assert_quoted_alias_insertion("Hive", HiveDialect::new(), "`User Source`").await;
     assert_quoted_alias_insertion("ClickHouse", ClickHouseDialect::new(), "`User Source`").await;
-    assert_quoted_alias_insertion(
-        "SQL Server compatibility",
-        PostgresDialect::new(),
-        "[User Source]",
-    )
-    .await;
+    assert_quoted_alias_insertion("SQL Server", MssqlDialect::new(), "[User Source]").await;
 }

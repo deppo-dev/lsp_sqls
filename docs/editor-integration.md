@@ -69,7 +69,7 @@ You can use the generic LSP client extension like `vscode-languageclient`:
      configs.sql_lsp = {
        default_config = {
          cmd = {'/path/to/sql-lsp'},
-         filetypes = {'sql', 'mysql', 'pgsql', 'clickhouse'},
+         filetypes = {'sql', 'mysql', 'pgsql', 'tsql', 'clickhouse'},
          root_dir = function(fname)
            return lspconfig.util.find_git_ancestor(fname) or vim.loop.cwd()
          end,
@@ -105,6 +105,13 @@ You can use the generic LSP client extension like `vscode-languageclient`:
      pattern = {"*.postgres.sql", "*.pg.sql"},
      callback = function()
        vim.bo.filetype = "pgsql"
+     end,
+   })
+
+   vim.api.nvim_create_autocmd({"BufRead", "BufNewFile"}, {
+     pattern = {"*.mssql.sql", "*.tsql.sql", "*.tsql"},
+     callback = function()
+       vim.bo.filetype = "tsql"
      end,
    })
    ```

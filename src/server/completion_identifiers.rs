@@ -155,7 +155,7 @@ pub(super) fn quote_completion_identifier(identifier: &str, dialect_name: &str) 
 
     if matches!(dialect_name, "mysql" | "hive" | "clickhouse") {
         format!("`{}`", identifier.replace('`', "``"))
-    } else if dialect_name == "sqlserver" {
+    } else if crate::tsql::is_tsql_dialect(dialect_name) {
         format!("[{}]", identifier.replace(']', "]]"))
     } else {
         format!("\"{}\"", identifier.replace('"', "\"\""))

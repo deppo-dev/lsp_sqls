@@ -15,7 +15,7 @@ A **high-performance**, **multi-dialect** SQL Language Server Protocol (LSP) imp
 
 ## ✨ Features
 
-- 🎯 **Multi-Dialect Support** - MySQL, PostgreSQL, Hive, ClickHouse, Elasticsearch (EQL/DSL), Redis
+- 🎯 **Multi-Dialect Support** - MySQL, PostgreSQL, SQL Server (T-SQL), Hive, ClickHouse, Elasticsearch (EQL/DSL), Redis
 - 🔍 **Intelligent Completion** - Context-aware suggestions with AST-based analysis
 - 📍 **Code Navigation** - Go-to-definition and find references
 - ⚡ **Real-Time Diagnostics** - Tree-sitter powered syntax error detection
@@ -477,6 +477,7 @@ The server uses AST-based context analysis to provide accurate completions:
 | --------------------- | -------- | ------------------------------------------- |
 | **MySQL**             | ✅ Full  | MySQL 5.7+ syntax, context-aware completion |
 | **PostgreSQL**        | ✅ Full  | PostgreSQL 12+ syntax, ILIKE support        |
+| **SQL Server**        | ✅ Full  | T-SQL: `[names]`, `#temp`, `TOP`, `APPLY`, `MERGE`, `OUTPUT inserted/deleted`, `GO` (`mssql`, alias `tsql`) |
 | **Hive**              | ✅ Full  | HiveQL syntax, PARTITION keyword            |
 | **ClickHouse**        | ✅ Full  | ClickHouse SQL, MergeTree support           |
 | **Elasticsearch EQL** | ✅ Full  | Event Query Language                        |
@@ -520,10 +521,12 @@ lsp_sqls/
 │   ├── dialects/         # SQL dialect implementations
 │   │   ├── mysql.rs      # MySQL dialect
 │   │   ├── postgres.rs   # PostgreSQL dialect
+│   │   ├── mssql.rs      # SQL Server (T-SQL) dialect
 │   │   └── ...
 │   ├── parser/           # SQL parsers
 │   │   └── sql.rs        # Tree-sitter SQL parser
 │   ├── schema.rs         # Schema management
+│   ├── tsql.rs           # T-SQL lexical forms read through a same-length rewrite
 │   └── token.rs          # Token definitions
 ├── tests/                # Integration tests
 ├── docs/                 # Documentation

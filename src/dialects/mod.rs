@@ -4,6 +4,7 @@ pub mod elasticsearch_dsl;
 pub mod elasticsearch_eql;
 pub mod hive;
 pub mod mongodb;
+pub mod mssql;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
@@ -14,6 +15,7 @@ pub use elasticsearch_dsl::ElasticsearchDslDialect;
 pub use elasticsearch_eql::ElasticsearchEqlDialect;
 pub use hive::HiveDialect;
 pub use mongodb::MongoDbDialect;
+pub use mssql::MssqlDialect;
 pub use mysql::MysqlDialect;
 pub use postgres::PostgresDialect;
 pub use redis::RedisDialect;
@@ -54,7 +56,6 @@ pub const POSTGRES_COMPATIBILITY_ALIASES: &[&str] = &[
     "oracle",
     "questdb",
     "redshift",
-    "sqlserver",
     "timescaledb",
     "vastbase",
     "vertica",
@@ -96,6 +97,10 @@ impl DialectRegistry {
         for alias in POSTGRES_COMPATIBILITY_ALIASES {
             registry.register_alias(alias, postgres.clone());
         }
+
+        let mssql = Arc::new(MssqlDialect::new());
+        registry.register(mssql.clone());
+        registry.register_alias("tsql", mssql);
 
         let sqlite = Arc::new(SqliteDialect::new());
         registry.register(sqlite.clone());
@@ -182,6 +187,16 @@ mod tests {
             .expect("DuckDB alias should be registered");
 
         assert_eq!(dialect.name(), "sqlite");
+    }
+
+    #[test]
+    fn resolves_tsql_to_the_mssql_dialect() {
+        let registry = DialectRegistry::new();
+        for name in ["mssql", "tsql", "MSSQL"] {
+            let dialect = registry.get_by_name(name).expect("T-SQL names resolve");
+            assert_eq!(dialect.name(), "mssql");
+        }
+        assert!(registry.get_by_name("sqlserver").is_none());
     }
 
     #[test]

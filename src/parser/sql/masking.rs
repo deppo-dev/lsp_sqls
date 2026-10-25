@@ -33,7 +33,8 @@ impl SqlParser {
     }
 
     pub(super) fn starts_hash_comment(source: &str, index: usize) -> bool {
-        if !source[index..].starts_with('#') {
+        // In T-SQL `#name` is a temp table.
+        if crate::tsql::is_active() || !source[index..].starts_with('#') {
             return false;
         }
 
@@ -226,6 +227,9 @@ impl SqlParser {
             index += ch.len_utf8();
         }
 
+        if crate::tsql::is_active() {
+            crate::tsql::mark_batch_separators_in(&mut output);
+        }
         output
     }
 }

@@ -229,7 +229,7 @@ const CLOUDFLARE_D1_SIGNATURES: &[(&str, &[&str])] = &[
     ("IFNULL", &["expression", "fallback"]),
 ];
 
-const SQLSERVER_SIGNATURES: &[(&str, &[&str])] = &[
+const MSSQL_SIGNATURES: &[(&str, &[&str])] = &[
     ("CONVERT", &["type", "expression"]),
     ("TRY_CAST", &["expression AS type"]),
     ("TRY_CONVERT", &["type", "expression"]),
@@ -250,6 +250,67 @@ const SQLSERVER_SIGNATURES: &[(&str, &[&str])] = &[
     ("LEN", &["string"]),
     ("STUFF", &["string", "start", "length", "replace"]),
     ("ISNULL", &["expression", "replacement"]),
+    ("IIF", &["condition", "true_value", "false_value"]),
+    ("CHOOSE", &["index", "value", "..."]),
+    ("FORMAT", &["value", "format", "culture"]),
+    ("CONCAT_WS", &["separator", "value", "..."]),
+    ("STRING_SPLIT", &["string", "separator"]),
+    ("STRING_AGG", &["expression", "separator"]),
+    ("TRIM", &["string"]),
+    ("LTRIM", &["string"]),
+    ("RTRIM", &["string"]),
+    ("LEFT", &["string", "length"]),
+    ("RIGHT", &["string", "length"]),
+    ("REPLICATE", &["string", "count"]),
+    ("QUOTENAME", &["string", "quote_char"]),
+    ("DATEFROMPARTS", &["year", "month", "day"]),
+    (
+        "DATETIME2FROMPARTS",
+        &[
+            "year",
+            "month",
+            "day",
+            "hour",
+            "minute",
+            "seconds",
+            "fractions",
+            "precision",
+        ],
+    ),
+    ("DATETRUNC", &["datepart", "date"]),
+    ("SWITCHOFFSET", &["datetimeoffset", "offset"]),
+    ("TODATETIMEOFFSET", &["datetime", "offset"]),
+    ("SCOPE_IDENTITY", &[]),
+    ("IDENT_CURRENT", &["table_name"]),
+    ("OBJECT_ID", &["object_name", "object_type"]),
+    ("OBJECT_NAME", &["object_id"]),
+    ("DB_NAME", &["database_id"]),
+    ("SCHEMA_NAME", &["schema_id"]),
+    ("SUSER_SNAME", &[]),
+    ("NEWSEQUENTIALID", &[]),
+    ("ISJSON", &["expression"]),
+    ("OPENJSON", &["expression", "path"]),
+    ("JSON_MODIFY", &["expression", "path", "new_value"]),
+    ("ROW_NUMBER", &[]),
+    ("RANK", &[]),
+    ("DENSE_RANK", &[]),
+    ("NTILE", &["groups"]),
+    ("LAG", &["expression", "offset", "default"]),
+    ("LEAD", &["expression", "offset", "default"]),
+];
+
+const MSSQL_SYSTEM_VALUES: &[&str] = &[
+    "@@ROWCOUNT",
+    "@@IDENTITY",
+    "@@ERROR",
+    "@@TRANCOUNT",
+    "@@SPID",
+    "@@VERSION",
+    "@@SERVERNAME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "SESSION_USER",
+    "SYSTEM_USER",
 ];
 
 const MANTICORE_SIGNATURES: &[(&str, &[&str])] = &[
@@ -392,9 +453,17 @@ fn version_allows(dialect: &str, name: &str, server_version: Option<(u32, u32)>)
         ("sqlite" | "sqlite3" | "turso" | "cloudflare-d1", name) if name.starts_with("JSON_") => {
             Some((3, 9))
         }
-        ("sqlserver", "TRY_CAST" | "TRY_CONVERT" | "EOMONTH") => Some((11, 0)),
-        ("sqlserver", "JSON_VALUE" | "JSON_QUERY") => Some((13, 0)),
-        ("sqlserver", "STRING_AGG") => Some((14, 0)),
+        (
+            "mssql" | "tsql",
+            "TRY_CAST" | "TRY_CONVERT" | "EOMONTH" | "IIF" | "CHOOSE" | "FORMAT" | "LAG" | "LEAD"
+            | "DATEFROMPARTS" | "DATETIME2FROMPARTS",
+        ) => Some((11, 0)),
+        (
+            "mssql" | "tsql",
+            "JSON_VALUE" | "JSON_QUERY" | "JSON_MODIFY" | "ISJSON" | "OPENJSON" | "STRING_SPLIT",
+        ) => Some((13, 0)),
+        ("mssql" | "tsql", "STRING_AGG" | "CONCAT_WS" | "TRIM") => Some((14, 0)),
+        ("mssql" | "tsql", "DATETRUNC") => Some((16, 0)),
         _ => None,
     };
     minimum.is_none_or(|minimum| version >= minimum)
@@ -428,7 +497,7 @@ fn dialect_signature_entries(
         "postgres" | "postgresql" | "pgsql" | "psql" => Some(POSTGRES_SIGNATURES),
         "sqlite" | "sqlite3" | "turso" => Some(SQLITE_SIGNATURES),
         "cloudflare-d1" => Some(CLOUDFLARE_D1_SIGNATURES),
-        "sqlserver" => Some(SQLSERVER_SIGNATURES),
+        "mssql" | "tsql" => Some(MSSQL_SIGNATURES),
         "manticoresearch" => Some(MANTICORE_SIGNATURES),
         _ => None,
     }
@@ -479,6 +548,13 @@ pub(crate) fn builtin_value_catalog_for(dialect: &str) -> Vec<BuiltinValue> {
             .map(|name| BuiltinValue {
                 name,
                 category: "Db2 special register",
+            })
+            .collect(),
+        "mssql" | "tsql" => MSSQL_SYSTEM_VALUES
+            .iter()
+            .map(|name| BuiltinValue {
+                name,
+                category: "SQL Server system value",
             })
             .collect(),
         "oracle" | "oceanbase-oracle" => ORACLE_SYSTEM_VALUES
@@ -589,7 +665,7 @@ mod tests {
 
     #[test]
     fn dialect_override_wins_over_common_signature() {
-        let signature = builtin_signatures_for("sqlserver", "convert", Some((16, 0)))
+        let signature = builtin_signatures_for("mssql", "convert", Some((16, 0)))
             .pop()
             .expect("SQL Server CONVERT signature");
         assert_eq!(signature.parameter_groups[0], ["type", "expression"]);
@@ -597,8 +673,8 @@ mod tests {
 
     #[test]
     fn server_version_filters_unavailable_signatures() {
-        assert!(builtin_signatures_for("sqlserver", "json_value", Some((12, 0))).is_empty());
-        assert!(!builtin_signatures_for("sqlserver", "json_value", Some((13, 0))).is_empty());
+        assert!(builtin_signatures_for("mssql", "json_value", Some((12, 0))).is_empty());
+        assert!(!builtin_signatures_for("mssql", "json_value", Some((13, 0))).is_empty());
     }
 
     #[test]
@@ -612,7 +688,7 @@ mod tests {
 
     #[test]
     fn completion_catalog_deduplicates_dialect_overrides() {
-        let catalog = builtin_signature_catalog_for("sqlserver", Some((16, 0)));
+        let catalog = builtin_signature_catalog_for("mssql", Some((16, 0)));
         let convert = catalog
             .iter()
             .filter(|signature| signature.name.eq_ignore_ascii_case("convert"))
@@ -623,7 +699,7 @@ mod tests {
 
     #[test]
     fn completion_catalog_applies_version_gates_and_non_sql_boundaries() {
-        let catalog = builtin_signature_catalog_for("sqlserver", Some((12, 0)));
+        let catalog = builtin_signature_catalog_for("mssql", Some((12, 0)));
         assert!(!catalog
             .iter()
             .any(|signature| signature.name == "JSON_VALUE"));
@@ -711,7 +787,7 @@ mod tests {
             );
         }
 
-        for dialect in ["postgres", "sqlserver"] {
+        for dialect in ["postgres", "mssql"] {
             assert!(builtin_signatures_for(dialect, "VERSION", None).is_empty());
             assert!(builtin_signatures_for(dialect, "REVERSE", None).is_empty());
             assert!(
@@ -768,7 +844,7 @@ mod tests {
             );
         }
 
-        for dialect in ["postgres", "oracle", "db2", "dameng", "sqlserver"] {
+        for dialect in ["postgres", "oracle", "db2", "dameng", "mssql"] {
             for name in expected {
                 assert!(
                     builtin_signatures_for(dialect, name, None).is_empty(),

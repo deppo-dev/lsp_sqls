@@ -964,7 +964,7 @@ fn missing_join_condition_code_action_uses_metadata_and_product_quoting() {
     let mut lsp = LspProcess::spawn();
     lsp.initialize();
 
-    let uri = "file:///workspace/join-fix.sqlserver.sql";
+    let uri = "file:///workspace/join-fix.mssql.sql";
     let schema_id = "77777777-7777-4777-8777-777777777777";
     lsp.notify(
         "workspace/didChangeConfiguration",
@@ -1045,12 +1045,12 @@ fn missing_join_condition_code_action_uses_metadata_and_product_quoting() {
                     "source_uri": null
                 }],
                 "fileSchemas": { (uri): schema_id },
-                "fileDialects": { (uri): "sqlserver" }
+                "fileDialects": { (uri): "mssql" }
             }
         }),
     );
     let sql = "SELECT o.[Customer ID] FROM app.orders o JOIN app.customers c;";
-    lsp.open(uri, "sqlserver", sql);
+    lsp.open(uri, "mssql", sql);
 
     let diagnostic_report = lsp.request(
         "textDocument/diagnostic",
@@ -1099,7 +1099,7 @@ fn missing_join_condition_code_action_uses_metadata_and_product_quoting() {
     );
     assert_eq!(
         inferred
-            .pointer("/edit/changes/file:~1~1~1workspace~1join-fix.sqlserver.sql/0/newText")
+            .pointer("/edit/changes/file:~1~1~1workspace~1join-fix.mssql.sql/0/newText")
             .and_then(Value::as_str),
         Some(" ON o.[Tenant ID] = c.[Tenant ID] AND o.[Customer ID] = c.[Customer ID]"),
         "{inferred}"
@@ -1111,12 +1111,12 @@ fn signature_help_falls_back_to_dialect_builtins_without_schema_metadata() {
     let mut lsp = LspProcess::spawn();
     lsp.initialize();
 
-    let uri = "file:///workspace/builtin.sqlserver.sql";
+    let uri = "file:///workspace/builtin.mssql.sql";
     lsp.notify(
         "workspace/didChangeConfiguration",
         json!({
             "settings": {
-                "fileDialects": { (uri): "sqlserver" }
+                "fileDialects": { (uri): "mssql" }
             }
         }),
     );
@@ -1764,7 +1764,7 @@ fn completion_models_cte_derived_and_temporary_relation_columns() {
     let ordinality_uri = "file:///workspace/table-function-ordinality.postgres.sql";
     let correlation_uri = "file:///workspace/table-correlation.postgres.sql";
     let comma_source_uri = "file:///workspace/comma-source.postgres.sql";
-    let table_hint_uri = "file:///workspace/table-hint.sqlserver.sql";
+    let table_hint_uri = "file:///workspace/table-hint.mssql.sql";
     lsp.notify(
         "workspace/didChangeConfiguration",
         json!({
@@ -1850,7 +1850,7 @@ fn completion_models_cte_derived_and_temporary_relation_columns() {
                     (ordinality_uri): "postgres",
                     (correlation_uri): "postgres",
                     (comma_source_uri): "postgres",
-                    (table_hint_uri): "sqlserver"
+                    (table_hint_uri): "mssql"
                 }
             }
         }),
@@ -1903,8 +1903,8 @@ fn completion_models_cte_derived_and_temporary_relation_columns() {
             vec!["id", "name", "email"],
         ),
     ] {
-        let language_id = if uri.ends_with(".sqlserver.sql") {
-            "sqlserver"
+        let language_id = if uri.ends_with(".mssql.sql") {
+            "mssql"
         } else {
             "postgres"
         };
